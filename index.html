@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp Voice Transcriber</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --surface2: #1e1e1e;
+    --border: #2a2a2a;
+    --text: #e5e5e5;
+    --text-dim: #888;
+    --accent: #25D366;
+    --accent-dim: #1a9e4a;
+    --danger: #e74c3c;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  header p {
+    color: var(--text-dim);
+    font-size: 0.875rem;
+  }
+
+  /* API Key Section */
+  .api-key-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .api-key-section label {
+    display: block;
+    font-size: 0.8125rem;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+  }
+
+  .api-key-row {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .api-key-row input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.625rem 0.875rem;
+    color: var(--text);
+    font-size: 0.875rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .api-key-row input:focus {
+    border-color: var(--accent);
+  }
+
+  .api-key-row button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 0.625rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
+  }
+
+  .api-key-row button:hover { background: var(--accent-dim); }
+
+  .api-key-saved {
+    font-size: 0.75rem;
+    color: var(--accent);
+    margin-top: 0.375rem;
+    display: none;
+  }
+
+  .api-key-hint {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 0.5rem;
+  }
+
+  .api-key-hint a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  /* Drop Zone */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 3rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    margin-bottom: 1.5rem;
+  }
+
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(37, 211, 102, 0.04);
+  }
+
+  .drop-zone-icon {
+    font-size: 2.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .drop-zone-text {
+    font-size: 0.9375rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .drop-zone-hint {
+    font-size: 0.8125rem;
+    color: var(--text-dim);
+  }
+
+  .drop-zone input[type="file"] { display: none; }
+
+  /* Transcription Cards */
+  .transcriptions { display: flex; flex-direction: column; gap: 1rem; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .card-filename {
+    font-size: 0.875rem;
+    font-weight: 500;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-status {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 999px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .card-status.processing {
+    background: rgba(37, 211, 102, 0.15);
+    color: var(--accent);
+  }
+
+  .card-status.done {
+    background: rgba(37, 211, 102, 0.15);
+    color: var(--accent);
+  }
+
+  .card-status.error {
+    background: rgba(231, 76, 60, 0.15);
+    color: var(--danger);
+  }
+
+  .card-body { padding: 1rem 1.25rem; }
+
+  .card-audio {
+    width: 100%;
+    margin-bottom: 0.75rem;
+    border-radius: 8px;
+    height: 40px;
+  }
+
+  .card-audio::-webkit-media-controls-panel { background: var(--surface2); }
+
+  .card-text {
+    font-size: 0.875rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    color: var(--text);
+  }
+
+  .card-text.placeholder {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .btn-sm {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.75rem;
+    padding: 0.375rem 0.75rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-sm:hover { background: var(--border); }
+
+  /* Spinner */
+  .spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.375rem;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(100%);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.8125rem;
+    opacity: 0;
+    transition: transform 0.3s, opacity 0.3s;
+    z-index: 100;
+  }
+
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+
+  /* Language select */
+  .options-row {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }
+
+  .options-row label {
+    font-size: 0.8125rem;
+    color: var(--text-dim);
+  }
+
+  .options-row select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    color: var(--text);
+    font-size: 0.8125rem;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .options-row select:focus { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>WhatsApp Voice Transcriber</h1>
+    <p>Drop m4a voice messages to get text transcriptions</p>
+  </header>
+
+  <!-- API Key -->
+  <div class="api-key-section">
+    <label for="apiKey">OpenAI API Key</label>
+    <div class="api-key-row">
+      <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off" />
+      <button onclick="saveApiKey()">Save</button>
+    </div>
+    <div class="api-key-saved" id="apiKeySaved">Key saved in browser</div>
+    <p class="api-key-hint">
+      Your key is stored only in this browser's localStorage.
+      Get one at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>
+    </p>
+  </div>
+
+  <!-- Options -->
+  <div class="options-row">
+    <label for="langSelect">Language hint:</label>
+    <select id="langSelect">
+      <option value="">Auto-detect</option>
+      <option value="en">English</option>
+      <option value="es">Spanish</option>
+      <option value="fr">French</option>
+      <option value="de">German</option>
+      <option value="it">Italian</option>
+      <option value="pt">Portuguese</option>
+      <option value="hi">Hindi</option>
+      <option value="ja">Japanese</option>
+      <option value="ko">Korean</option>
+      <option value="zh">Chinese</option>
+      <option value="ar">Arabic</option>
+      <option value="ru">Russian</option>
+      <option value="nl">Dutch</option>
+      <option value="pl">Polish</option>
+      <option value="tr">Turkish</option>
+      <option value="uk">Ukrainian</option>
+      <option value="pa">Punjabi</option>
+      <option value="ur">Urdu</option>
+    </select>
+  </div>
+
+  <!-- Drop Zone -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">🎙</div>
+    <div class="drop-zone-text">Drop audio files here or click to browse</div>
+    <div class="drop-zone-hint">Supports m4a, ogg, opus, mp3, wav, webm</div>
+    <input type="file" id="fileInput" multiple accept=".m4a,.ogg,.opus,.mp3,.wav,.webm,audio/*" />
+  </div>
+
+  <!-- Transcription Results -->
+  <div class="transcriptions" id="transcriptions"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SUPPORTED = ['m4a', 'ogg', 'opus', 'mp3', 'wav', 'webm', 'mp4', 'mpeg', 'mpga'];
+const MAX_SIZE = 25 * 1024 * 1024; // 25 MB Whisper limit
+
+// --- API Key ---
+const apiKeyInput = document.getElementById('apiKey');
+const savedMsg = document.getElementById('apiKeySaved');
+
+function loadApiKey() {
+  const k = localStorage.getItem('whisper_api_key');
+  if (k) {
+    apiKeyInput.value = k;
+    savedMsg.style.display = 'block';
+  }
+}
+
+function saveApiKey() {
+  const k = apiKeyInput.value.trim();
+  if (!k) return;
+  localStorage.setItem('whisper_api_key', k);
+  savedMsg.style.display = 'block';
+  showToast('API key saved');
+}
+
+function getApiKey() {
+  return apiKeyInput.value.trim() || localStorage.getItem('whisper_api_key') || '';
+}
+
+loadApiKey();
+
+// --- Drop Zone ---
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => { handleFiles(fileInput.files); fileInput.value = ''; });
+
+function handleFiles(fileList) {
+  const key = getApiKey();
+  if (!key) { showToast('Please enter your OpenAI API key first'); return; }
+
+  for (const file of fileList) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!SUPPORTED.includes(ext)) {
+      showToast(`Unsupported format: .${ext}`);
+      continue;
+    }
+    if (file.size > MAX_SIZE) {
+      showToast(`File too large (max 25 MB): ${file.name}`);
+      continue;
+    }
+    transcribeFile(file, key);
+  }
+}
+
+// --- Transcription ---
+async function transcribeFile(file, apiKey) {
+  const card = createCard(file);
+
+  const lang = document.getElementById('langSelect').value;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('model', 'whisper-1');
+  form.append('response_format', 'verbose_json');
+  if (lang) form.append('language', lang);
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    card.setText(data.text);
+    card.setStatus('done', `${data.language || 'done'} · ${formatDuration(data.duration)}`);
+  } catch (e) {
+    card.setText(`Error: ${e.message}`);
+    card.setStatus('error', 'failed');
+  }
+}
+
+// --- Card UI ---
+function createCard(file) {
+  const container = document.getElementById('transcriptions');
+  const el = document.createElement('div');
+  el.className = 'card';
+
+  const audioURL = URL.createObjectURL(file);
+
+  el.innerHTML = `
+    <div class="card-header">
+      <span class="card-filename">${escHtml(file.name)}</span>
+      <span class="card-status processing"><span class="spinner"></span>transcribing</span>
+    </div>
+    <div class="card-body">
+      <audio class="card-audio" controls preload="metadata" src="${audioURL}"></audio>
+      <div class="card-text placeholder">Transcribing...</div>
+    </div>
+    <div class="card-actions" style="display:none">
+      <button class="btn-sm btn-copy">Copy text</button>
+      <button class="btn-sm btn-download">Download .txt</button>
+    </div>
+  `;
+
+  container.prepend(el);
+
+  const statusEl = el.querySelector('.card-status');
+  const textEl = el.querySelector('.card-text');
+  const actionsEl = el.querySelector('.card-actions');
+
+  el.querySelector('.btn-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(textEl.textContent).then(() => showToast('Copied'));
+  });
+
+  el.querySelector('.btn-download').addEventListener('click', () => {
+    const blob = new Blob([textEl.textContent], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file.name.replace(/\.[^.]+$/, '') + '.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  return {
+    setText(text) {
+      textEl.textContent = text;
+      textEl.classList.remove('placeholder');
+      if (!text.startsWith('Error')) actionsEl.style.display = 'flex';
+    },
+    setStatus(type, label) {
+      statusEl.className = `card-status ${type}`;
+      statusEl.textContent = label;
+    },
+  };
+}
+
+// --- Helpers ---
+function formatDuration(sec) {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
