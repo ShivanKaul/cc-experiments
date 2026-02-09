@@ -53,6 +53,36 @@
     font-size: 0.8125rem;
   }
 
+  /* Model banner */
+  .model-banner {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    display: none;
+  }
+
+  .model-banner.visible { display: block; }
+
+  .model-banner .progress-bar {
+    height: 4px;
+    background: var(--surface2);
+    border-radius: 2px;
+    margin-top: 0.5rem;
+    overflow: hidden;
+  }
+
+  .model-banner .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.3s;
+  }
+
   /* Drop Zone */
   .drop-zone {
     border: 2px dashed var(--border);
@@ -115,6 +145,21 @@
     color: var(--accent);
   }
 
+  .card-status.loading {
+    background: rgba(37, 211, 102, 0.12);
+    color: var(--accent);
+  }
+
+  .card-status.done {
+    background: rgba(37, 211, 102, 0.12);
+    color: var(--accent);
+  }
+
+  .card-status.error {
+    background: rgba(231, 76, 60, 0.12);
+    color: var(--danger);
+  }
+
   .card-body { padding: 0.875rem 1rem; }
 
   .card-audio {
@@ -130,6 +175,11 @@
     margin-top: 0.75rem;
     color: var(--text-dim);
     font-style: italic;
+  }
+
+  .card-text.final {
+    color: var(--text);
+    font-style: normal;
   }
 
   .card-actions {
@@ -158,6 +208,21 @@
     color: var(--text-dim);
   }
 
+  /* Spinner */
+  .spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.25rem;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* Toast */
   .toast {
     position: fixed;
@@ -178,14 +243,6 @@
     transform: translateX(-50%) translateY(0);
     opacity: 1;
   }
-
-  /* Empty state */
-  .empty-state {
-    text-align: center;
-    color: var(--text-dim);
-    font-size: 0.8125rem;
-    padding: 1rem 0;
-  }
 </style>
 </head>
 <body>
@@ -195,6 +252,11 @@
     <h1>Voice Transcriber</h1>
     <p>On-device transcription for WhatsApp voice messages</p>
   </header>
+
+  <div class="model-banner" id="modelBanner">
+    <span id="modelStatus">Loading Whisper model...</span>
+    <div class="progress-bar"><div class="progress-fill" id="modelProgress"></div></div>
+  </div>
 
   <div class="drop-zone" id="dropZone">
     <div class="drop-zone-icon">🎙</div>
@@ -208,12 +270,131 @@
 
 <div class="toast" id="toast"></div>
 
-<script>
+<script type="module">
+import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+
 const SUPPORTED = new Set(['m4a', 'ogg', 'opus', 'mp3', 'wav', 'webm', 'mp4', 'mpeg', 'mpga']);
+const MODEL_ID = 'onnx-community/whisper-tiny';
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 const cardsEl = document.getElementById('cards');
+const modelBanner = document.getElementById('modelBanner');
+const modelStatus = document.getElementById('modelStatus');
+const modelProgress = document.getElementById('modelProgress');
+
+// --- Whisper pipeline (lazy-loaded, singleton) ---
+let transcriber = null;
+let transcriberLoading = false;
+const transcriberQueue = []; // callbacks waiting for model
+
+async function getTranscriber() {
+  if (transcriber) return transcriber;
+
+  if (transcriberLoading) {
+    return new Promise(resolve => transcriberQueue.push(resolve));
+  }
+
+  transcriberLoading = true;
+  modelBanner.classList.add('visible');
+  modelStatus.textContent = 'Downloading Whisper model (~40 MB, cached after first load)...';
+
+  try {
+    transcriber = await pipeline(
+      'automatic-speech-recognition',
+      MODEL_ID,
+      {
+        dtype: 'q8',
+        device: 'wasm',
+        progress_callback: (progress) => {
+          if (progress.status === 'progress' && progress.total) {
+            const pct = Math.round((progress.loaded / progress.total) * 100);
+            modelProgress.style.width = pct + '%';
+            modelStatus.textContent = `Downloading model... ${pct}%`;
+          } else if (progress.status === 'ready') {
+            modelProgress.style.width = '100%';
+            modelStatus.textContent = 'Model ready';
+            setTimeout(() => modelBanner.classList.remove('visible'), 1500);
+          }
+        },
+      }
+    );
+  } catch (e) {
+    modelStatus.textContent = `Failed to load model: ${e.message}`;
+    transcriberLoading = false;
+    throw e;
+  }
+
+  // Resolve any queued callers
+  for (const resolve of transcriberQueue) resolve(transcriber);
+  transcriberQueue.length = 0;
+
+  return transcriber;
+}
+
+// --- Decode audio file to 16kHz mono Float32Array ---
+async function decodeAudio(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+  // Mix down to mono
+  const length = decoded.length;
+  const mono = new Float32Array(length);
+  const channels = decoded.numberOfChannels;
+  for (let ch = 0; ch < channels; ch++) {
+    const chData = decoded.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      mono[i] += chData[i];
+    }
+  }
+  if (channels > 1) {
+    for (let i = 0; i < length; i++) {
+      mono[i] /= channels;
+    }
+  }
+
+  await audioCtx.close();
+  return mono;
+}
+
+// --- Transcription ---
+async function transcribeFile(file, card) {
+  card.setStatus('loading', '<span class="spinner"></span>loading model');
+
+  let asr;
+  try {
+    asr = await getTranscriber();
+  } catch (e) {
+    card.setText(`Error loading model: ${e.message}`);
+    card.setStatus('error', 'failed');
+    return;
+  }
+
+  card.setStatus('loading', '<span class="spinner"></span>decoding audio');
+
+  let audio;
+  try {
+    audio = await decodeAudio(file);
+  } catch (e) {
+    card.setText(`Error decoding audio: ${e.message}`);
+    card.setStatus('error', 'failed');
+    return;
+  }
+
+  card.setStatus('loading', '<span class="spinner"></span>transcribing');
+  card.setText('Transcribing...');
+
+  try {
+    const result = await asr(audio, { language: 'en', task: 'transcribe' });
+    card.setText(result.text.trim());
+    card.setStatus('done', 'done');
+    card.showActions();
+  } catch (e) {
+    card.setText(`Error: ${e.message}`);
+    card.setStatus('error', 'failed');
+  }
+}
 
 // --- File handling ---
 dropZone.addEventListener('click', () => fileInput.click());
@@ -233,7 +414,8 @@ function addFiles(fileList) {
       showToast(`Unsupported: .${ext}`);
       continue;
     }
-    createCard(file);
+    const card = createCard(file);
+    transcribeFile(file, card);
   }
 }
 
@@ -251,15 +433,33 @@ function createCard(file) {
     </div>
     <div class="card-body">
       <audio class="card-audio" controls preload="metadata" src="${audioURL}"></audio>
-      <div class="card-text">Transcription will appear here</div>
+      <div class="card-text">Waiting...</div>
     </div>
-    <div class="card-actions">
+    <div class="card-actions" style="display:none">
+      <button class="btn btn-copy">Copy</button>
+      <button class="btn btn-download">Download .txt</button>
       <button class="btn btn-remove">Remove</button>
     </div>
   `;
 
-  // Set filename via textContent to avoid XSS
   el.querySelector('.card-filename').textContent = file.name;
+
+  const textEl = el.querySelector('.card-text');
+  const statusEl = el.querySelector('.card-status');
+  const actionsEl = el.querySelector('.card-actions');
+
+  el.querySelector('.btn-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(textEl.textContent).then(() => showToast('Copied'));
+  });
+
+  el.querySelector('.btn-download').addEventListener('click', () => {
+    const blob = new Blob([textEl.textContent], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file.name.replace(/\.[^.]+$/, '') + '.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
 
   el.querySelector('.btn-remove').addEventListener('click', () => {
     URL.revokeObjectURL(audioURL);
@@ -267,6 +467,20 @@ function createCard(file) {
   });
 
   cardsEl.prepend(el);
+
+  return {
+    setText(text) {
+      textEl.textContent = text;
+      textEl.classList.toggle('final', !text.startsWith('Error') && !text.startsWith('Waiting') && !text.startsWith('Transcribing'));
+    },
+    setStatus(type, label) {
+      statusEl.className = `card-status ${type}`;
+      statusEl.innerHTML = label;
+    },
+    showActions() {
+      actionsEl.style.display = 'flex';
+    },
+  };
 }
 
 // --- Toast ---
