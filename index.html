@@ -392,7 +392,12 @@ async function transcribeFile(file, card) {
   card.setText('Transcribing...');
 
   try {
-    var result = await asr(audio, { language: 'en', task: 'transcribe' });
+    var result = await asr(audio, {
+      language: 'en',
+      task: 'transcribe',
+      chunk_length_s: 30,
+      stride_length_s: 5,
+    });
     card.setText(result.text.trim());
     card.setStatus('done', 'done');
     card.showActions();
