@@ -18,5 +18,8 @@
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.56.1"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1"
   }
 }
