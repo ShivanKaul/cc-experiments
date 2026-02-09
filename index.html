@@ -270,11 +270,11 @@
 
 <div class="toast" id="toast"></div>
 
-<script type="module">
-import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
-
+<script>
+(function() {
 const SUPPORTED = new Set(['m4a', 'ogg', 'opus', 'mp3', 'wav', 'webm', 'mp4', 'mpeg', 'mpga']);
 const MODEL_ID = 'onnx-community/whisper-tiny';
+const LIB_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -284,9 +284,10 @@ const modelStatus = document.getElementById('modelStatus');
 const modelProgress = document.getElementById('modelProgress');
 
 // --- Whisper pipeline (lazy-loaded, singleton) ---
+let pipelineFn = null;
 let transcriber = null;
 let transcriberLoading = false;
-const transcriberQueue = []; // callbacks waiting for model
+const transcriberQueue = [];
 
 async function getTranscriber() {
   if (transcriber) return transcriber;
@@ -297,36 +298,42 @@ async function getTranscriber() {
 
   transcriberLoading = true;
   modelBanner.classList.add('visible');
-  modelStatus.textContent = 'Downloading Whisper model (~40 MB, cached after first load)...';
+  modelStatus.textContent = 'Loading library...';
 
   try {
-    transcriber = await pipeline(
+    if (!pipelineFn) {
+      const mod = await import(LIB_URL);
+      pipelineFn = mod.pipeline;
+    }
+
+    modelStatus.textContent = 'Downloading Whisper model (~40 MB, cached after first load)...';
+
+    transcriber = await pipelineFn(
       'automatic-speech-recognition',
       MODEL_ID,
       {
         dtype: 'q8',
         device: 'wasm',
-        progress_callback: (progress) => {
+        progress_callback: function(progress) {
           if (progress.status === 'progress' && progress.total) {
-            const pct = Math.round((progress.loaded / progress.total) * 100);
+            var pct = Math.round((progress.loaded / progress.total) * 100);
             modelProgress.style.width = pct + '%';
-            modelStatus.textContent = `Downloading model... ${pct}%`;
+            modelStatus.textContent = 'Downloading model... ' + pct + '%';
           } else if (progress.status === 'ready') {
             modelProgress.style.width = '100%';
             modelStatus.textContent = 'Model ready';
-            setTimeout(() => modelBanner.classList.remove('visible'), 1500);
+            setTimeout(function() { modelBanner.classList.remove('visible'); }, 1500);
           }
         },
       }
     );
   } catch (e) {
-    modelStatus.textContent = `Failed to load model: ${e.message}`;
+    modelStatus.textContent = 'Failed to load model: ' + e.message;
     transcriberLoading = false;
     throw e;
   }
 
-  // Resolve any queued callers
-  for (const resolve of transcriberQueue) resolve(transcriber);
+  for (var i = 0; i < transcriberQueue.length; i++) transcriberQueue[i](transcriber);
   transcriberQueue.length = 0;
 
   return transcriber;
@@ -334,22 +341,21 @@ async function getTranscriber() {
 
 // --- Decode audio file to 16kHz mono Float32Array ---
 async function decodeAudio(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  var arrayBuffer = await file.arrayBuffer();
+  var audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  var decoded = await audioCtx.decodeAudioData(arrayBuffer);
 
-  // Mix down to mono
-  const length = decoded.length;
-  const mono = new Float32Array(length);
-  const channels = decoded.numberOfChannels;
-  for (let ch = 0; ch < channels; ch++) {
-    const chData = decoded.getChannelData(ch);
-    for (let i = 0; i < length; i++) {
+  var length = decoded.length;
+  var mono = new Float32Array(length);
+  var channels = decoded.numberOfChannels;
+  for (var ch = 0; ch < channels; ch++) {
+    var chData = decoded.getChannelData(ch);
+    for (var i = 0; i < length; i++) {
       mono[i] += chData[i];
     }
   }
   if (channels > 1) {
-    for (let i = 0; i < length; i++) {
+    for (var i = 0; i < length; i++) {
       mono[i] /= channels;
     }
   }
@@ -362,22 +368,22 @@ async function decodeAudio(file) {
 async function transcribeFile(file, card) {
   card.setStatus('loading', '<span class="spinner"></span>loading model');
 
-  let asr;
+  var asr;
   try {
     asr = await getTranscriber();
   } catch (e) {
-    card.setText(`Error loading model: ${e.message}`);
+    card.setText('Error loading model: ' + e.message);
     card.setStatus('error', 'failed');
     return;
   }
 
   card.setStatus('loading', '<span class="spinner"></span>decoding audio');
 
-  let audio;
+  var audio;
   try {
     audio = await decodeAudio(file);
   } catch (e) {
-    card.setText(`Error decoding audio: ${e.message}`);
+    card.setText('Error decoding audio: ' + e.message);
     card.setStatus('error', 'failed');
     return;
   }
@@ -386,82 +392,82 @@ async function transcribeFile(file, card) {
   card.setText('Transcribing...');
 
   try {
-    const result = await asr(audio, { language: 'en', task: 'transcribe' });
+    var result = await asr(audio, { language: 'en', task: 'transcribe' });
     card.setText(result.text.trim());
     card.setStatus('done', 'done');
     card.showActions();
   } catch (e) {
-    card.setText(`Error: ${e.message}`);
+    card.setText('Error: ' + e.message);
     card.setStatus('error', 'failed');
   }
 }
 
 // --- File handling ---
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => {
+dropZone.addEventListener('click', function() { fileInput.click(); });
+dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('dragover'); });
+dropZone.addEventListener('drop', function(e) {
   e.preventDefault();
   dropZone.classList.remove('dragover');
   addFiles(e.dataTransfer.files);
 });
-fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+fileInput.addEventListener('change', function() { addFiles(fileInput.files); fileInput.value = ''; });
 
 function addFiles(fileList) {
-  for (const file of fileList) {
-    const ext = file.name.split('.').pop().toLowerCase();
+  for (var i = 0; i < fileList.length; i++) {
+    var file = fileList[i];
+    var ext = file.name.split('.').pop().toLowerCase();
     if (!SUPPORTED.has(ext)) {
-      showToast(`Unsupported: .${ext}`);
+      showToast('Unsupported: .' + ext);
       continue;
     }
-    const card = createCard(file);
+    var card = createCard(file);
     transcribeFile(file, card);
   }
 }
 
 // --- Card UI ---
 function createCard(file) {
-  const el = document.createElement('div');
+  var el = document.createElement('div');
   el.className = 'card';
 
-  const audioURL = URL.createObjectURL(file);
+  var audioURL = URL.createObjectURL(file);
 
-  el.innerHTML = `
-    <div class="card-header">
-      <span class="card-filename"></span>
-      <span class="card-status ready">ready</span>
-    </div>
-    <div class="card-body">
-      <audio class="card-audio" controls preload="metadata" src="${audioURL}"></audio>
-      <div class="card-text">Waiting...</div>
-    </div>
-    <div class="card-actions" style="display:none">
-      <button class="btn btn-copy">Copy</button>
-      <button class="btn btn-download">Download .txt</button>
-      <button class="btn btn-remove">Remove</button>
-    </div>
-  `;
+  el.innerHTML =
+    '<div class="card-header">' +
+      '<span class="card-filename"></span>' +
+      '<span class="card-status ready">ready</span>' +
+    '</div>' +
+    '<div class="card-body">' +
+      '<audio class="card-audio" controls preload="metadata" src="' + audioURL + '"></audio>' +
+      '<div class="card-text">Waiting...</div>' +
+    '</div>' +
+    '<div class="card-actions" style="display:none">' +
+      '<button class="btn btn-copy">Copy</button>' +
+      '<button class="btn btn-download">Download .txt</button>' +
+      '<button class="btn btn-remove">Remove</button>' +
+    '</div>';
 
   el.querySelector('.card-filename').textContent = file.name;
 
-  const textEl = el.querySelector('.card-text');
-  const statusEl = el.querySelector('.card-status');
-  const actionsEl = el.querySelector('.card-actions');
+  var textEl = el.querySelector('.card-text');
+  var statusEl = el.querySelector('.card-status');
+  var actionsEl = el.querySelector('.card-actions');
 
-  el.querySelector('.btn-copy').addEventListener('click', () => {
-    navigator.clipboard.writeText(textEl.textContent).then(() => showToast('Copied'));
+  el.querySelector('.btn-copy').addEventListener('click', function() {
+    navigator.clipboard.writeText(textEl.textContent).then(function() { showToast('Copied'); });
   });
 
-  el.querySelector('.btn-download').addEventListener('click', () => {
-    const blob = new Blob([textEl.textContent], { type: 'text/plain' });
-    const a = document.createElement('a');
+  el.querySelector('.btn-download').addEventListener('click', function() {
+    var blob = new Blob([textEl.textContent], { type: 'text/plain' });
+    var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = file.name.replace(/\.[^.]+$/, '') + '.txt';
     a.click();
     URL.revokeObjectURL(a.href);
   });
 
-  el.querySelector('.btn-remove').addEventListener('click', () => {
+  el.querySelector('.btn-remove').addEventListener('click', function() {
     URL.revokeObjectURL(audioURL);
     el.remove();
   });
@@ -469,15 +475,16 @@ function createCard(file) {
   cardsEl.prepend(el);
 
   return {
-    setText(text) {
+    setText: function(text) {
       textEl.textContent = text;
-      textEl.classList.toggle('final', !text.startsWith('Error') && !text.startsWith('Waiting') && !text.startsWith('Transcribing'));
+      var isFinal = text.indexOf('Error') !== 0 && text !== 'Waiting...' && text !== 'Transcribing...';
+      textEl.classList.toggle('final', isFinal);
     },
-    setStatus(type, label) {
-      statusEl.className = `card-status ${type}`;
+    setStatus: function(type, label) {
+      statusEl.className = 'card-status ' + type;
       statusEl.innerHTML = label;
     },
-    showActions() {
+    showActions: function() {
       actionsEl.style.display = 'flex';
     },
   };
@@ -485,12 +492,13 @@ function createCard(file) {
 
 // --- Toast ---
 function showToast(msg) {
-  const t = document.getElementById('toast');
+  var t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove('show'), 2500);
+  t._timer = setTimeout(function() { t.classList.remove('show'); }, 2500);
 }
+})();
 </script>
 </body>
 </html>
