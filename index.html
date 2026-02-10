@@ -53,6 +53,40 @@
     font-size: 0.8125rem;
   }
 
+  /* Model picker */
+  .model-picker {
+    margin-bottom: 1.25rem;
+  }
+
+  .model-picker label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-bottom: 0.375rem;
+  }
+
+  .model-picker select {
+    width: 100%;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    cursor: pointer;
+  }
+
+  .model-picker select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   /* Model banner */
   .model-banner {
     background: var(--surface);
@@ -253,6 +287,16 @@
     <p>On-device transcription for WhatsApp voice messages</p>
   </header>
 
+  <div class="model-picker">
+    <label for="modelSelect">Whisper model</label>
+    <select id="modelSelect">
+      <option value="onnx-community/whisper-small">Small — ~200 MB (recommended)</option>
+      <option value="onnx-community/whisper-tiny">Tiny — ~40 MB</option>
+      <option value="onnx-community/whisper-base">Base — ~80 MB</option>
+      <option value="onnx-community/whisper-large-v3-turbo">Large v3 Turbo — ~500+ MB</option>
+    </select>
+  </div>
+
   <div class="model-banner" id="modelBanner">
     <span id="modelStatus">Loading Whisper model...</span>
     <div class="progress-bar"><div class="progress-fill" id="modelProgress"></div></div>
@@ -273,8 +317,17 @@
 <script>
 (function() {
 const SUPPORTED = new Set(['m4a', 'ogg', 'opus', 'mp3', 'wav', 'webm', 'mp4', 'mpeg', 'mpga']);
-const MODEL_ID = 'onnx-community/whisper-tiny';
-const LIB_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+const MODEL_SIZES = {
+  'onnx-community/whisper-tiny': '~40 MB',
+  'onnx-community/whisper-base': '~80 MB',
+  'onnx-community/whisper-small': '~200 MB',
+  'onnx-community/whisper-large-v3-turbo': '~500+ MB',
+};
+
+// Request persistent storage to prevent browser eviction of cached models
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist();
+}
 
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -282,62 +335,28 @@ const cardsEl = document.getElementById('cards');
 const modelBanner = document.getElementById('modelBanner');
 const modelStatus = document.getElementById('modelStatus');
 const modelProgress = document.getElementById('modelProgress');
+const modelSelect = document.getElementById('modelSelect');
 
-// --- Whisper pipeline (lazy-loaded, singleton) ---
-let pipelineFn = null;
-let transcriber = null;
-let transcriberLoading = false;
-const transcriberQueue = [];
-
-async function getTranscriber() {
-  if (transcriber) return transcriber;
-
-  if (transcriberLoading) {
-    return new Promise(resolve => transcriberQueue.push(resolve));
-  }
-
-  transcriberLoading = true;
-  modelBanner.classList.add('visible');
-  modelStatus.textContent = 'Loading library...';
-
-  try {
-    if (!pipelineFn) {
-      const mod = await import(LIB_URL);
-      pipelineFn = mod.pipeline;
-    }
-
-    modelStatus.textContent = 'Downloading Whisper model (~40 MB, cached after first load)...';
-
-    transcriber = await pipelineFn(
-      'automatic-speech-recognition',
-      MODEL_ID,
-      {
-        dtype: 'q8',
-        device: 'wasm',
-        progress_callback: function(progress) {
-          if (progress.status === 'progress' && progress.total) {
-            var pct = Math.round((progress.loaded / progress.total) * 100);
-            modelProgress.style.width = pct + '%';
-            modelStatus.textContent = 'Downloading model... ' + pct + '%';
-          } else if (progress.status === 'ready') {
-            modelProgress.style.width = '100%';
-            modelStatus.textContent = 'Model ready';
-            setTimeout(function() { modelBanner.classList.remove('visible'); }, 1500);
-          }
-        },
-      }
-    );
-  } catch (e) {
-    modelStatus.textContent = 'Failed to load model: ' + e.message;
-    transcriberLoading = false;
-    throw e;
-  }
-
-  for (var i = 0; i < transcriberQueue.length; i++) transcriberQueue[i](transcriber);
-  transcriberQueue.length = 0;
-
-  return transcriber;
+function getSelectedModel() {
+  return modelSelect.value;
 }
+
+// --- Web Worker for off-main-thread transcription ---
+const worker = new Worker('whisper-worker.js', { type: 'module' });
+var nextJobId = 0;
+var jobHandlers = {};
+var activeTranscriptions = 0;
+
+worker.onmessage = function(e) {
+  var msg = e.data;
+  var handler = jobHandlers[msg.id];
+  if (handler) handler(msg);
+};
+
+modelSelect.addEventListener('change', function() {
+  worker.postMessage({ type: 'reset' });
+  modelProgress.style.width = '0%';
+});
 
 // --- Decode audio file to 16kHz mono Float32Array ---
 async function decodeAudio(file) {
@@ -364,18 +383,10 @@ async function decodeAudio(file) {
   return mono;
 }
 
-// --- Transcription ---
+// --- Transcription (via worker) ---
 async function transcribeFile(file, card) {
-  card.setStatus('loading', '<span class="spinner"></span>loading model');
-
-  var asr;
-  try {
-    asr = await getTranscriber();
-  } catch (e) {
-    card.setText('Error loading model: ' + e.message);
-    card.setStatus('error', 'failed');
-    return;
-  }
+  activeTranscriptions++;
+  modelSelect.disabled = true;
 
   card.setStatus('loading', '<span class="spinner"></span>decoding audio');
 
@@ -385,26 +396,70 @@ async function transcribeFile(file, card) {
   } catch (e) {
     card.setText('Error decoding audio: ' + e.message);
     card.setStatus('error', 'failed');
+    activeTranscriptions--;
+    if (activeTranscriptions === 0) modelSelect.disabled = false;
     return;
   }
 
-  card.setStatus('loading', '<span class="spinner"></span>transcribing');
-  card.setText('Transcribing...');
+  card.setStatus('loading', '<span class="spinner"></span>loading model');
 
-  try {
-    var result = await asr(audio, {
-      language: 'en',
-      task: 'transcribe',
-      chunk_length_s: 30,
-      stride_length_s: 5,
-    });
-    card.setText(result.text.trim());
-    card.setStatus('done', 'done');
-    card.showActions();
-  } catch (e) {
-    card.setText('Error: ' + e.message);
-    card.setStatus('error', 'failed');
-  }
+  var jobId = nextJobId++;
+  var partialText = '';
+  var sizeLabel = MODEL_SIZES[getSelectedModel()] || '';
+
+  jobHandlers[jobId] = function(msg) {
+    switch (msg.type) {
+      case 'status':
+        if (msg.status === 'loading-library') {
+          modelBanner.classList.add('visible');
+          modelProgress.style.width = '0%';
+          modelStatus.textContent = 'Loading library...';
+          card.setStatus('loading', '<span class="spinner"></span>loading model');
+        } else if (msg.status === 'loading-model') {
+          modelStatus.textContent = 'Downloading Whisper model (' + sizeLabel + ', cached after first load)...';
+        } else if (msg.status === 'transcribing') {
+          card.setStatus('loading', '<span class="spinner"></span>transcribing (0/' + msg.totalChunks + ')');
+          card.setText('Transcribing...');
+        }
+        break;
+      case 'model-progress':
+        if (msg.progress.status === 'progress' && msg.progress.total) {
+          var pct = Math.round((msg.progress.loaded / msg.progress.total) * 100);
+          modelProgress.style.width = pct + '%';
+          modelStatus.textContent = 'Downloading model... ' + pct + '%';
+        } else if (msg.progress.status === 'ready') {
+          modelProgress.style.width = '100%';
+          modelStatus.textContent = 'Model ready';
+          setTimeout(function() { modelBanner.classList.remove('visible'); }, 1500);
+        }
+        break;
+      case 'chunk':
+        partialText += (partialText ? ' ' : '') + msg.text;
+        card.setText(partialText);
+        card.setStatus('loading', '<span class="spinner"></span>transcribing (' + msg.chunksProcessed + '/' + msg.totalChunks + ')');
+        break;
+      case 'result':
+        card.setText(msg.text);
+        card.setStatus('done', 'done');
+        card.showActions();
+        delete jobHandlers[jobId];
+        activeTranscriptions--;
+        if (activeTranscriptions === 0) modelSelect.disabled = false;
+        break;
+      case 'error':
+        card.setText('Error: ' + msg.error);
+        card.setStatus('error', 'failed');
+        delete jobHandlers[jobId];
+        activeTranscriptions--;
+        if (activeTranscriptions === 0) modelSelect.disabled = false;
+        break;
+    }
+  };
+
+  worker.postMessage(
+    { type: 'transcribe', id: jobId, modelId: getSelectedModel(), audio: audio },
+    [audio.buffer]
+  );
 }
 
 // --- File handling ---

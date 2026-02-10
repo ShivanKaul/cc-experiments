@@ -16,6 +16,9 @@ test.beforeAll(async () => {
     if (req.url === '/' || req.url === '/index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(readFileSync(join(rootDir, 'index.html')));
+    } else if (req.url === '/whisper-worker.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end(readFileSync(join(rootDir, 'whisper-worker.js')));
     } else {
       res.writeHead(404);
       res.end();
@@ -102,6 +105,28 @@ test('multiple files create multiple cards', async ({ page }) => {
 
   await page.locator('#fileInput').setInputFiles(testAudio);
   await expect(page.locator('.card')).toHaveCount(2);
+});
+
+test('model picker is visible with expected options', async ({ page }) => {
+  await page.goto(baseURL);
+
+  const select = page.locator('#modelSelect');
+  await expect(select).toBeVisible();
+
+  const options = select.locator('option');
+  await expect(options).toHaveCount(4);
+
+  await expect(options.nth(0)).toHaveAttribute('value', 'onnx-community/whisper-small');
+  await expect(options.nth(1)).toHaveAttribute('value', 'onnx-community/whisper-tiny');
+  await expect(options.nth(2)).toHaveAttribute('value', 'onnx-community/whisper-base');
+  await expect(options.nth(3)).toHaveAttribute('value', 'onnx-community/whisper-large-v3-turbo');
+});
+
+test('model picker defaults to whisper-small', async ({ page }) => {
+  await page.goto(baseURL);
+
+  const select = page.locator('#modelSelect');
+  await expect(select).toHaveValue('onnx-community/whisper-small');
 });
 
 test('transcription attempts to load model after file upload', async ({ page }) => {

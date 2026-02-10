@@ -15,6 +15,9 @@ test.beforeAll(async () => {
     if (req.url === '/' || req.url === '/index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(readFileSync(join(rootDir, 'index.html')));
+    } else if (req.url === '/whisper-worker.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end(readFileSync(join(rootDir, 'whisper-worker.js')));
     } else {
       res.writeHead(404);
       res.end();
@@ -46,6 +49,9 @@ test('long voice note transcription completes successfully', async ({ page }) =>
   });
 
   await page.goto(baseURL);
+
+  // Use whisper-tiny for speed in CI
+  await page.locator('#modelSelect').selectOption('onnx-community/whisper-tiny');
 
   const longVoiceNote = join(__dirname, 'long-voice-note.wav');
   await page.locator('#fileInput').setInputFiles(longVoiceNote);
@@ -81,6 +87,9 @@ test('long voice note produces non-degenerate output', async ({ page }) => {
   });
 
   await page.goto(baseURL);
+
+  // Use whisper-tiny for speed in CI
+  await page.locator('#modelSelect').selectOption('onnx-community/whisper-tiny');
 
   const longVoiceNote = join(__dirname, 'long-voice-note.wav');
   await page.locator('#fileInput').setInputFiles(longVoiceNote);
